@@ -66,7 +66,7 @@ def render_main_menu_frame():
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (120, 120, 120), 2)
 
     # Footer
-    cv2.putText(frame, "v2.0 | Kalman + Ridge + Tap-Click", (430, 680),
+    cv2.putText(frame, "v2.0 | Index Tap: Left | Two Fingers: Right", (370, 680),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 80, 80), 1)
 
     return frame

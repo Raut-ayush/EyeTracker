@@ -28,6 +28,9 @@ from config import (
     CURSOR_ALPHA_LOW,
     CURSOR_ALPHA_HIGH,
     CURSOR_SPEED_THRESHOLD,
+    CALIBRATION_MAX_RETRIES,
+    CALIBRATION_RETRY_ERROR_RATIO,
+    CALIBRATION_RETRY_MIN_IMPROVEMENT,
 )
 
 from eye_tracker import EyeTracker
@@ -277,7 +280,8 @@ def capture_calibration_sample(
     current,
     total,
     sample_count=CALIBRATION_SAMPLES,
-    timeout_sec=CALIBRATION_TIMEOUT
+    timeout_sec=CALIBRATION_TIMEOUT,
+    status_prefix="Hold still",
 ):
     samples = []
     start = time.time()
@@ -334,7 +338,7 @@ def capture_calibration_sample(
             current,
             total,
             preview=preview,
-            status=f"Hold still... {len(samples)}/{sample_count}",
+            status=f"{status_prefix}... {len(samples)}/{sample_count}",
             stability=stability
         )
 
@@ -431,6 +435,82 @@ def calibration_flow(cap, tracker, screen_w, screen_h):
         prev_target = target
 
     calibration.fit()
+
+    # A point can be stable yet still be wrong (missed target, brief loss of
+    # attention, unusual pose). Retry only strong post-fit outliers, and keep
+    # the replacement only when it measurably improves the complete model.
+    retry_threshold = (
+        CALIBRATION_RETRY_ERROR_RATIO
+        * float(np.hypot(screen_w, screen_h))
+    )
+
+    for retry_number in range(CALIBRATION_MAX_RETRIES):
+        old_errors = calibration.training_errors(screen_w, screen_h)
+        # The center establishes normalization and is deliberately not retried.
+        worst_idx = 1 + int(np.argmax(old_errors[1:]))
+        worst_error = float(old_errors[worst_idx])
+
+        if worst_error <= retry_threshold:
+            break
+
+        target = calibration.targets[worst_idx]
+        log(
+            f"Calibration quality retry {retry_number + 1}/"
+            f"{CALIBRATION_MAX_RETRIES}: point {worst_idx + 1} "
+            f"residual={worst_error:.1f}px"
+        )
+
+        ok = animate_target_transition(
+            cap,
+            tracker,
+            screen_w,
+            screen_h,
+            prev_target,
+            target,
+            worst_idx,
+            total,
+        )
+        if not ok:
+            log("Calibration retry cancelled; keeping original sample")
+            break
+
+        replacement = capture_calibration_sample(
+            cap,
+            tracker,
+            screen_w,
+            screen_h,
+            target,
+            worst_idx,
+            total,
+            status_prefix="Quality retry - hold still",
+        )
+        if replacement is None:
+            log("Calibration retry failed; keeping original sample")
+            break
+
+        old_sample = calibration.samples[worst_idx].copy()
+        old_score = float(np.mean(old_errors) + np.max(old_errors))
+        calibration.replace_sample(worst_idx, replacement)
+        calibration.fit()
+        new_errors = calibration.training_errors(screen_w, screen_h)
+        new_score = float(np.mean(new_errors) + np.max(new_errors))
+        improvement = (old_score - new_score) / max(old_score, 1e-6)
+
+        if improvement >= CALIBRATION_RETRY_MIN_IMPROVEMENT:
+            log(
+                f"Accepted retry for point {worst_idx + 1}: "
+                f"fit improved {improvement * 100:.1f}%"
+            )
+            prev_target = target
+        else:
+            calibration.samples[worst_idx] = old_sample
+            calibration.fit()
+            log(
+                f"Rejected retry for point {worst_idx + 1}: "
+                f"fit improvement {improvement * 100:.1f}%"
+            )
+            break
+
     log("Calibration complete")
     return calibration
 
@@ -606,18 +686,14 @@ def tracking_loop(cap, tracker, hand_tracker, calibration, screen_w, screen_h):
         # 2. PROCESS HAND GESTURES
         hand_result = hand_tracker.process(frame)
         
-        # Check for pending single taps (if double tap window expired)
-        if hand_result is None:
-            hand_result = hand_tracker.check_pending_tap()
-
         # Execute clicks
         if hand_result:
             if hand_result["gesture"] == "click":
                 log("GESTURE: Single Click")
                 pyautogui.click()
-            elif hand_result["gesture"] == "doubleclick":
-                log("GESTURE: Double Click")
-                pyautogui.doubleClick()
+            elif hand_result["gesture"] == "rightclick":
+                log("GESTURE: Right Click")
+                pyautogui.rightClick()
 
         clutch_active = hand_tracker.is_index_finger_present()
 

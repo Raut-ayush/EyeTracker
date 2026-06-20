@@ -115,7 +115,13 @@ class GazeCalibration:
             self.current_index
         ]
 
-        self.samples.append({
+        self.samples.append(self._sample_record(features, tx, ty))
+
+        self.current_index += 1
+
+    def _sample_record(self, features, tx, ty):
+        """Build one serializable calibration record."""
+        return {
 
             # ======================================
             # RAW GAZE
@@ -159,9 +165,24 @@ class GazeCalibration:
             # ======================================
             "target_x": float(tx),
             "target_y": float(ty),
-        })
+        }
 
-        self.current_index += 1
+    def replace_sample(self, index, features):
+        """Replace a captured point without disturbing calibration order."""
+        tx, ty = self.targets[index]
+        self.samples[index] = self._sample_record(features, tx, ty)
+
+    def training_errors(self, screen_w, screen_h):
+        """Return post-fit pixel residuals for captured calibration points."""
+        return np.array([
+            self.compute_error(
+                self.predict(sample),
+                (sample["target_x"], sample["target_y"]),
+                screen_w,
+                screen_h,
+            )
+            for sample in self.samples
+        ], dtype=np.float64)
 
     # ==========================================
     # COMPLETE

@@ -55,6 +55,9 @@ GAZE_STABILITY_X = 0.018       # rolling horizontal iris-position std limit
 GAZE_STABILITY_Y = 0.022       # rolling vertical iris-position std limit
 CALIBRATION_SCHEMA_VERSION = 9 # increment when profile format/model changes
 RIDGE_LAMBDA = 1.0             # regularisation for the standardized compact model
+CALIBRATION_MAX_RETRIES = 2    # retry only the clearest post-fit outliers
+CALIBRATION_RETRY_ERROR_RATIO = 0.12  # fraction of screen diagonal
+CALIBRATION_RETRY_MIN_IMPROVEMENT = 0.03  # reject retries improving < 3%
 
 # ============================================================
 # HAND TRACKER / TAP GESTURE
@@ -66,9 +69,6 @@ TAP_UP_THRESHOLD   = 0.030    # normalised Y rise to complete the tap
 
 # Max frames a single tap motion can span before it is cancelled.
 TAP_MAX_DURATION_MS = 600     # milliseconds
-
-# If a second complete tap lands within this window → double click.
-DOUBLE_TAP_WINDOW_MS = 500    # milliseconds
 
 # Cooldown after any click fires (prevents repeat triggers).
 TAP_COOLDOWN_MS = 350         # milliseconds
