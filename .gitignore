@@ -1,0 +1,74 @@
+# Virtual Environment
+.venv/
+venv/
+env/
+eyetracker/
+profiles/
+CLAUDE.md
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Compiled Extensions
+*.so
+*.pyd
+*.dll
+
+# Distribution / Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Environment Variables
+.env
+.env.*
+
+# Logs
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project Specific
+profiles/
+calibration_data/
+user_profiles/
+
+# Temporary Files
+*.tmp
+*.temp
+
+# Model Files (if large)
+*.pt
+*.pth
+*.onnx
+
+# MediaPipe Cache
+mediapipe_cache/
+
+# Local Settings
+config.local.py
+
+# Runtime Generated Files
+*.csv
+*.json
+*.db
+*.sqlite3
