@@ -279,9 +279,13 @@ class EyeTracker:
         self,
         frame
     ):
+        h_orig, w_orig = frame.shape[:2]
+
+        # Downscale to 640x360 for 4x CPU speedup
+        small_frame = cv2.resize(frame, (640, 360))
 
         rgb_frame = cv2.cvtColor(
-            frame,
+            small_frame,
             cv2.COLOR_BGR2RGB
         )
 
@@ -294,7 +298,7 @@ class EyeTracker:
 
         landmarks = results.multi_face_landmarks[0]
 
-        h, w, _ = frame.shape
+        h, w = h_orig, w_orig
 
         # ==========================================
         # LEFT EYE
