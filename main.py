@@ -24,7 +24,7 @@ from config import (
 from eye_tracker import EyeTracker
 from hand_tracker import HandTracker
 from calibration import GazeCalibration
-from filters import KalmanFilter2D, EdgeDamper
+from filters import KalmanFilter2D, EdgeDamper, AdaptiveEMA2D
 from profile_manager import ProfileManager
 from ui import (
     render_main_menu_frame,
@@ -342,17 +342,15 @@ def capture_calibration_sample(
 
 
 def calibration_flow(cap, tracker, screen_w, screen_h):
-    # Reset reference eye height for fresh calibration
+    # Reset reference eye height and neutral pose for fresh calibration
     tracker.set_reference_eye_height(None)
+    tracker.set_neutral_pose(0.0, 0.0)
     
-    # Step 1: Capture neutral head pose
-    neutral_yaw, neutral_pitch = capture_neutral_pose(
-        cap, tracker, screen_w, screen_h
-    )
-    tracker.set_neutral_pose(neutral_yaw, neutral_pitch)
-    
-    # Step 2: Run calibration points
+    # Step 1: Initialize calibration with zero neutral pose
     calibration = GazeCalibration()
+    calibration.neutral_yaw = 0.0
+    calibration.neutral_pitch = 0.0
+    
     total = len(calibration.targets)
 
     prev_target = calibration.targets[0]
@@ -386,6 +384,15 @@ def calibration_flow(cap, tracker, screen_w, screen_h):
         if sample is None:
             log("Calibration cancelled or failed")
             return None
+
+        if idx == 0:
+            # Point 1 is the center target. Use its head pose as baseline!
+            neutral_yaw = sample["yaw"]
+            neutral_pitch = sample["pitch"]
+            tracker.set_neutral_pose(neutral_yaw, neutral_pitch)
+            calibration.neutral_yaw = neutral_yaw
+            calibration.neutral_pitch = neutral_pitch
+            log(f"Set neutral head pose baseline from center: yaw={neutral_yaw:.4f}, pitch={neutral_pitch:.4f}")
 
         calibration.add_sample(sample)
         log(f"Saved point {calibration.current_index}/{total}")
@@ -536,6 +543,7 @@ def tracking_loop(cap, tracker, hand_tracker, calibration, screen_w, screen_h):
 
     # Initialize new filter stack
     kf = KalmanFilter2D()
+    adaptive_ema = AdaptiveEMA2D(alpha_low=0.03, alpha_high=0.35, speed_threshold=15.0)
     edge_damper = EdgeDamper(screen_w, screen_h)
 
     prev_x = screen_w / 2
@@ -570,6 +578,8 @@ def tracking_loop(cap, tracker, hand_tracker, calibration, screen_w, screen_h):
                 log("GESTURE: Double Click")
                 pyautogui.doubleClick()
 
+        clutch_active = hand_tracker.is_index_finger_present()
+
         # Update cursor if gaze is valid (i.e., not blinking)
         if features is not None:
             tracker.draw_debug(frame, features)
@@ -577,11 +587,15 @@ def tracking_loop(cap, tracker, hand_tracker, calibration, screen_w, screen_h):
             # Predict normalised coords
             norm_x, norm_y = calibration.predict(features)
 
-            target_x = norm_x * screen_w
-            target_y = norm_y * screen_h
+            # Apply Kalman Filter in normalised coordinate space
+            smooth_nx, smooth_ny = kf.update(norm_x, norm_y)
 
-            # Apply Kalman Filter
-            smooth_x, smooth_y = kf.update(target_x, target_y)
+            # Convert to pixel space
+            target_x = smooth_nx * screen_w
+            target_y = smooth_ny * screen_h
+
+            # Apply Adaptive EMA (fixation lock) in pixel space
+            smooth_x, smooth_y = adaptive_ema.update(target_x, target_y)
             
             # Apply Edge Damping
             smooth_x, smooth_y = edge_damper.update(smooth_x, smooth_y)
@@ -590,17 +604,19 @@ def tracking_loop(cap, tracker, hand_tracker, calibration, screen_w, screen_h):
             smooth_x = max(SCREEN_MARGIN, min(screen_w - SCREEN_MARGIN - 1, smooth_x))
             smooth_y = max(SCREEN_MARGIN, min(screen_h - SCREEN_MARGIN - 1, smooth_y))
 
-            # Dead zone to prevent micro-jitter
-            if abs(smooth_x - prev_x) > DEAD_ZONE or abs(smooth_y - prev_y) > DEAD_ZONE:
-                pyautogui.moveTo(int(smooth_x), int(smooth_y), duration=0)
-                prev_x, prev_y = smooth_x, smooth_y
+            # Move cursor only if index finger is visible (clutch is active)
+            if clutch_active:
+                if abs(smooth_x - prev_x) > DEAD_ZONE or abs(smooth_y - prev_y) > DEAD_ZONE:
+                    pyautogui.moveTo(int(smooth_x), int(smooth_y), duration=0)
+                    prev_x, prev_y = smooth_x, smooth_y
 
             draw_tracking_overlay(
                 frame,
                 features["gaze_x"],
                 features["gaze_y"],
                 smooth_x,
-                smooth_y
+                smooth_y,
+                clutch_active=clutch_active
             )
 
         # Draw hand tracker debug
@@ -638,6 +654,7 @@ def tracking_loop(cap, tracker, hand_tracker, calibration, screen_w, screen_h):
             )
             # Reset filters after validation to avoid sudden jumps
             kf.reset()
+            adaptive_ema.reset()
             edge_damper.reset()
 
         elif key == 27:
@@ -697,6 +714,7 @@ def main():
                 return
 
             calibration = GazeCalibration.from_dict(data)
+            tracker.set_neutral_pose(calibration.neutral_yaw, calibration.neutral_pitch)
             log(f"Loaded profile: {selected}")
             
             # Switch to UI for tracking

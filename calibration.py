@@ -58,6 +58,10 @@ class GazeCalibration:
         # Mean IPD at calibration time (for distance compensation)
         self.mean_ipd = None
 
+        # Neutral head pose baseline (for serialization)
+        self.neutral_yaw = 0.0
+        self.neutral_pitch = 0.0
+
     # ==========================================
     # TARGET
     # ==========================================
@@ -113,10 +117,10 @@ class GazeCalibration:
             "gaze_y": float(features["gaze_y"]),
 
             # ======================================
-            # HEAD-COMPENSATED GAZE (primary signal)
+            # HEAD-COMPENSATED GAZE (calculated relative to baseline)
             # ======================================
-            "comp_gx": float(features["comp_gx"]),
-            "comp_gy": float(features["comp_gy"]),
+            "comp_gx": float(features["gaze_x"]) + (float(features["yaw"]) - self.neutral_yaw) * 3.5,
+            "comp_gy": float(features["gaze_y"]) + (float(features["pitch"]) - self.neutral_pitch) * 4.0,
 
             # ======================================
             # LEFT EYE
@@ -366,6 +370,10 @@ class GazeCalibration:
             "coeff_y": self.coeff_y.tolist(),
 
             "mean_ipd": self.mean_ipd,
+
+            "neutral_yaw": self.neutral_yaw,
+
+            "neutral_pitch": self.neutral_pitch,
         }
 
     # ==========================================
@@ -406,5 +414,8 @@ class GazeCalibration:
         )
 
         obj.mean_ipd = data.get("mean_ipd", None)
+
+        obj.neutral_yaw = data.get("neutral_yaw", 0.0)
+        obj.neutral_pitch = data.get("neutral_pitch", 0.0)
 
         return obj

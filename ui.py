@@ -200,7 +200,7 @@ def render_calibration_frame(
 # ============================================================
 # TRACKING OVERLAY (improved HUD)
 # ============================================================
-def draw_tracking_overlay(frame, gaze_x, gaze_y, screen_x=None, screen_y=None):
+def draw_tracking_overlay(frame, gaze_x, gaze_y, screen_x=None, screen_y=None, clutch_active=True):
     h, w = frame.shape[:2]
 
     # Semi-transparent status bar at top
@@ -208,14 +208,18 @@ def draw_tracking_overlay(frame, gaze_x, gaze_y, screen_x=None, screen_y=None):
     cv2.rectangle(overlay, (0, 0), (w, 55), (20, 20, 20), -1)
     cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
 
-    cv2.putText(frame, "TRACKING ACTIVE", (15, 35),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 255, 200), 2)
+    if clutch_active:
+        cv2.putText(frame, "EYE CONTROL: ON", (15, 35),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 255, 120), 2)
+    else:
+        cv2.putText(frame, "EYE CONTROL: OFF (RAISE INDEX FINGER)", (15, 35),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (120, 160, 255), 2)
 
-    cv2.putText(frame, f"Gaze: ({gaze_x:.3f}, {gaze_y:.3f})", (250, 35),
+    cv2.putText(frame, f"Gaze: ({gaze_x:.3f}, {gaze_y:.3f})", (450, 35),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
 
-    if screen_x is not None and screen_y is not None:
-        cv2.putText(frame, f"Cursor: ({int(screen_x)}, {int(screen_y)})", (500, 35),
+    if screen_x is not None and screen_y is not None and clutch_active:
+        cv2.putText(frame, f"Cursor: ({int(screen_x)}, {int(screen_y)})", (650, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
 
 

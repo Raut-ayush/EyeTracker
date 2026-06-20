@@ -67,6 +67,11 @@ class HandTracker:
         # Frame skip counter
         self._frame_counter = 0
         self._last_result = None
+        self.index_finger_present = False
+
+    def is_index_finger_present(self):
+        """Check if the index finger is currently visible and extended."""
+        return self.index_finger_present
 
     def process(self, frame):
         """Process a frame and return gesture dict or None.
@@ -97,6 +102,7 @@ class HandTracker:
 
         if not results.multi_hand_landmarks:
             # No hand visible — reset
+            self.index_finger_present = False
             if self.state != self.COOLDOWN:
                 self._reset_tracking()
             return None
@@ -108,6 +114,7 @@ class HandTracker:
 
         # Only track when index finger is extended (tip above MCP)
         finger_extended = index_tip_y < index_mcp_y
+        self.index_finger_present = finger_extended
 
         if not finger_extended:
             if self.state not in (self.COOLDOWN,):
