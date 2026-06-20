@@ -62,6 +62,13 @@ class GazeCalibration:
         self.neutral_yaw = 0.0
         self.neutral_pitch = 0.0
 
+        # Runtime normalization captured at the first center point.
+        self.reference_eye_height = None
+
+        # Standardization for the compact regression feature vector.
+        self.feature_mean = None
+        self.feature_scale = None
+
     # ==========================================
     # TARGET
     # ==========================================
@@ -119,8 +126,8 @@ class GazeCalibration:
             # ======================================
             # HEAD-COMPENSATED GAZE (calculated relative to baseline)
             # ======================================
-            "comp_gx": float(features["gaze_x"]) + (float(features["yaw"]) - self.neutral_yaw) * 3.5,
-            "comp_gy": float(features["gaze_y"]) + (float(features["pitch"]) - self.neutral_pitch) * 4.0,
+            "comp_gx": float(features.get("comp_gx", features["gaze_x"])),
+            "comp_gy": float(features.get("comp_gy", features["gaze_y"])),
 
             # ======================================
             # LEFT EYE
@@ -167,62 +174,34 @@ class GazeCalibration:
         )
 
     # ==========================================
-    # FEATURE VECTOR (expanded basis)
+    # FEATURE VECTOR (compact basis)
     # ==========================================
-    def _basis(
+    def _raw_basis(
         self,
         sample
     ):
-        # Head-compensated gaze is the PRIMARY signal
-        cgx = sample.get("comp_gx", sample["gaze_x"])
-        cgy = sample.get("comp_gy", sample["gaze_y"])
-
-        # Raw gaze and head pose as secondary correction terms
         gx = sample["gaze_x"]
         gy = sample["gaze_y"]
-        yaw = sample["yaw"]
-        pitch = sample["pitch"]
-
-        # IPD ratio: current / calibration mean
-        ipd = sample.get("ipd_px", 0.0)
-        if self.mean_ipd and self.mean_ipd > 1e-3:
-            ipd_ratio = ipd / self.mean_ipd
-        else:
-            ipd_ratio = 1.0
+        yaw = sample["yaw"] - self.neutral_yaw
+        pitch = sample["pitch"] - self.neutral_pitch
 
         return np.array([
-
-            1.0,
-
-            # ---- Primary: head-compensated gaze ----
-            cgx,
-            cgy,
-
-            # Quadratic compensated
-            cgx ** 2,
-            cgy ** 2,
-            cgx * cgy,
-
-            # ---- Secondary: raw iris position ----
             gx,
             gy,
-
-            # ---- Head pose (residual correction) ----
             yaw,
             pitch,
+            gx * gx,
+            gy * gy,
+            gx * gy,
+        ], dtype=np.float64)
 
-            # ---- Cross terms ----
-            yaw * cgx,
-            pitch * cgy,
-
-            # ---- Eye openness (squint correction) ----
-            sample["left_open"],
-            sample["right_open"],
-
-            # ---- IPD distance ratio ----
-            ipd_ratio,
-
-        ])
+    def _basis(self, sample):
+        raw = self._raw_basis(sample)
+        if self.feature_mean is None or self.feature_scale is None:
+            normalized = raw
+        else:
+            normalized = (raw - self.feature_mean) / self.feature_scale
+        return np.concatenate(([1.0], normalized))
 
     # ==========================================
     # FIT (ridge regression)
@@ -237,10 +216,14 @@ class GazeCalibration:
         else:
             self.mean_ipd = None
 
-        X = np.array([
-            self._basis(s)
-            for s in self.samples
-        ])
+        raw_X = np.array([self._raw_basis(s) for s in self.samples])
+        self.feature_mean = np.mean(raw_X, axis=0)
+        self.feature_scale = np.std(raw_X, axis=0)
+        self.feature_scale[self.feature_scale < 1e-4] = 1.0
+        X = np.column_stack((
+            np.ones(len(raw_X)),
+            (raw_X - self.feature_mean) / self.feature_scale,
+        ))
 
         yx = np.array([
             s["target_x"]
@@ -374,6 +357,12 @@ class GazeCalibration:
             "neutral_yaw": self.neutral_yaw,
 
             "neutral_pitch": self.neutral_pitch,
+
+            "reference_eye_height": self.reference_eye_height,
+
+            "feature_mean": self.feature_mean.tolist(),
+
+            "feature_scale": self.feature_scale.tolist(),
         }
 
     # ==========================================
@@ -405,17 +394,21 @@ class GazeCalibration:
             obj.samples
         )
 
-        obj.coeff_x = np.array(
-            data["coeff_x"]
-        )
-
-        obj.coeff_y = np.array(
-            data["coeff_y"]
-        )
-
         obj.mean_ipd = data.get("mean_ipd", None)
 
         obj.neutral_yaw = data.get("neutral_yaw", 0.0)
         obj.neutral_pitch = data.get("neutral_pitch", 0.0)
+
+        obj.reference_eye_height = data.get("reference_eye_height", None)
+
+        if version < CALIBRATION_SCHEMA_VERSION:
+            # Older coefficients used a different, over-parameterized basis.
+            # Refit from the saved calibration samples using the current model.
+            obj.fit()
+        else:
+            obj.feature_mean = np.array(data["feature_mean"], dtype=np.float64)
+            obj.feature_scale = np.array(data["feature_scale"], dtype=np.float64)
+            obj.coeff_x = np.array(data["coeff_x"], dtype=np.float64)
+            obj.coeff_y = np.array(data["coeff_y"], dtype=np.float64)
 
         return obj

@@ -7,6 +7,7 @@ import time
 import traceback
 import pyautogui
 import numpy as np
+from collections import deque
 
 from config import (
     CAMERA_INDEX,
@@ -19,12 +20,20 @@ from config import (
     DEAD_ZONE,
     SCREEN_MARGIN,
     NEUTRAL_POSE_FRAMES,
+    PYAUTOGUI_PAUSE,
+    CALIBRATION_SETTLE_SECONDS,
+    CALIBRATION_STABILITY_WINDOW,
+    GAZE_STABILITY_X,
+    GAZE_STABILITY_Y,
+    CURSOR_ALPHA_LOW,
+    CURSOR_ALPHA_HIGH,
+    CURSOR_SPEED_THRESHOLD,
 )
 
 from eye_tracker import EyeTracker
 from hand_tracker import HandTracker
 from calibration import GazeCalibration
-from filters import KalmanFilter2D, EdgeDamper, AdaptiveEMA2D
+from filters import KalmanFilter2D, EdgeDamper, AdaptiveEMA2D, MedianFilter2D
 from profile_manager import ProfileManager
 from ui import (
     render_main_menu_frame,
@@ -37,6 +46,7 @@ from ui import (
 
 WINDOW_NAME = "EyeTracker"
 pyautogui.FAILSAFE = True
+pyautogui.PAUSE = PYAUTOGUI_PAUSE
 
 
 def log(message):
@@ -240,9 +250,21 @@ def _average_numeric_features(samples):
     if not numeric_keys:
         return None
 
+    # Reject whole frames that are outliers in the signals most relevant to
+    # gaze. This avoids mixing a blink/saccade into otherwise good averages.
+    core_keys = ["gaze_x", "gaze_y", "yaw", "pitch"]
+    core = np.array([[float(s[k]) for k in core_keys] for s in samples])
+    median = np.median(core, axis=0)
+    mad = np.median(np.abs(core - median), axis=0)
+    robust_scale = np.maximum(1.4826 * mad, 1e-5)
+    keep = np.all(np.abs(core - median) / robust_scale < 3.5, axis=1)
+    filtered = [s for s, accepted in zip(samples, keep) if accepted]
+    if len(filtered) < 5:
+        filtered = samples
+
     out = {}
     for k in numeric_keys:
-        out[k] = float(sum(float(s[k]) for s in samples) / len(samples))
+        out[k] = float(np.median([float(s[k]) for s in filtered]))
     return out
 
 
@@ -266,6 +288,7 @@ def capture_calibration_sample(
     # Debug counters
     no_face_count = 0
     unstable_count = 0
+    recent = deque(maxlen=CALIBRATION_STABILITY_WINDOW)
 
     while len(samples) < sample_count and (time.time() - start) < timeout_sec:
         ret, cam = cap.read()
@@ -283,16 +306,23 @@ def capture_calibration_sample(
             no_face_count += 1
         elif features is not None:
             tracker.draw_debug(preview, features)
-            
-            # stability: 1.0 = perfectly still, 0.0 = moving head
-            yaw_dev = abs(float(features.get("yaw", 0.0)))
-            pitch_dev = abs(float(features.get("pitch", 0.0)))
-            
-            s_yaw = max(0.0, 1.0 - (yaw_dev / HEAD_STABILITY_YAW))
-            s_pitch = max(0.0, 1.0 - (pitch_dev / HEAD_STABILITY_PITCH))
-            stability = min(s_yaw, s_pitch)
-            
-            if stability > 0.05:
+            recent.append(features)
+
+            settled = (time.time() - start) >= CALIBRATION_SETTLE_SECONDS
+            if settled and len(recent) == CALIBRATION_STABILITY_WINDOW:
+                yaw_std = np.std([s["yaw"] for s in recent])
+                pitch_std = np.std([s["pitch"] for s in recent])
+                gx_std = np.std([s["gaze_x"] for s in recent])
+                gy_std = np.std([s["gaze_y"] for s in recent])
+                ratios = (
+                    yaw_std / HEAD_STABILITY_YAW,
+                    pitch_std / HEAD_STABILITY_PITCH,
+                    gx_std / GAZE_STABILITY_X,
+                    gy_std / GAZE_STABILITY_Y,
+                )
+                stability = max(0.0, 1.0 - max(ratios))
+
+            if settled and stability > 0.05:
                 samples.append(features)
             else:
                 unstable_count += 1
@@ -331,6 +361,7 @@ def capture_calibration_sample(
     # If this is a center point, update the tracker's reference eye height
     if is_center_point and "avg_eye_h" in avg_features:
         tracker.set_reference_eye_height(avg_features["avg_eye_h"])
+        # Persist this value so loaded profiles use identical normalization.
         log(f"Set reference eye height: {avg_features['avg_eye_h']:.3f}")
 
     log(
@@ -392,6 +423,7 @@ def calibration_flow(cap, tracker, screen_w, screen_h):
             tracker.set_neutral_pose(neutral_yaw, neutral_pitch)
             calibration.neutral_yaw = neutral_yaw
             calibration.neutral_pitch = neutral_pitch
+            calibration.reference_eye_height = sample.get("avg_eye_h")
             log(f"Set neutral head pose baseline from center: yaw={neutral_yaw:.4f}, pitch={neutral_pitch:.4f}")
 
         calibration.add_sample(sample)
@@ -455,7 +487,8 @@ def validation_mode(cap, tracker, calibration, screen_w, screen_h):
             frame = cv2.flip(frame, 1)
 
             features = tracker.get_gaze_features(frame)
-            if features is not None:
+            # Ignore the initial saccade and collect only the fixation period.
+            if features is not None and time.time() - start >= 0.6:
                 pred = calibration.predict(features)
                 samples.append(pred)
 
@@ -505,8 +538,8 @@ def validation_mode(cap, tracker, calibration, screen_w, screen_h):
         if len(samples) == 0:
             continue
 
-        avg_x = sum(s[0] for s in samples) / len(samples)
-        avg_y = sum(s[1] for s in samples) / len(samples)
+        avg_x = float(np.median([s[0] for s in samples]))
+        avg_y = float(np.median([s[1] for s in samples]))
 
         error = calibration.compute_error(
             (avg_x, avg_y),
@@ -516,7 +549,10 @@ def validation_mode(cap, tracker, calibration, screen_w, screen_h):
         )
 
         errors.append(error)
-        log(f"[Validation {idx+1}] Error = {error:.1f}px")
+        err_x = (avg_x - target[0]) * screen_w
+        err_y = (avg_y - target[1]) * screen_h
+        log(f"[Validation {idx+1}] Error = {error:.1f}px "
+            f"(dx={err_x:+.1f}, dy={err_y:+.1f})")
 
     if len(errors) == 0:
         return
@@ -542,8 +578,13 @@ def tracking_loop(cap, tracker, hand_tracker, calibration, screen_w, screen_h):
     log("Tracking started")
 
     # Initialize new filter stack
+    median_filter = MedianFilter2D()
     kf = KalmanFilter2D()
-    adaptive_ema = AdaptiveEMA2D(alpha_low=0.03, alpha_high=0.35, speed_threshold=15.0)
+    adaptive_ema = AdaptiveEMA2D(
+        alpha_low=CURSOR_ALPHA_LOW,
+        alpha_high=CURSOR_ALPHA_HIGH,
+        speed_threshold=CURSOR_SPEED_THRESHOLD,
+    )
     edge_damper = EdgeDamper(screen_w, screen_h)
 
     prev_x = screen_w / 2
@@ -586,6 +627,10 @@ def tracking_loop(cap, tracker, hand_tracker, calibration, screen_w, screen_h):
             
             # Predict normalised coords
             norm_x, norm_y = calibration.predict(features)
+
+            # Reject one- or two-frame involuntary gaze spikes before they can
+            # add velocity to the Kalman state.
+            norm_x, norm_y = median_filter.update(norm_x, norm_y)
 
             # Apply Kalman Filter in normalised coordinate space
             smooth_nx, smooth_ny = kf.update(norm_x, norm_y)
@@ -653,6 +698,7 @@ def tracking_loop(cap, tracker, hand_tracker, calibration, screen_w, screen_h):
                 screen_h
             )
             # Reset filters after validation to avoid sudden jumps
+            median_filter.reset()
             kf.reset()
             adaptive_ema.reset()
             edge_damper.reset()
@@ -715,6 +761,7 @@ def main():
 
             calibration = GazeCalibration.from_dict(data)
             tracker.set_neutral_pose(calibration.neutral_yaw, calibration.neutral_pitch)
+            tracker.set_reference_eye_height(calibration.reference_eye_height)
             log(f"Loaded profile: {selected}")
             
             # Switch to UI for tracking

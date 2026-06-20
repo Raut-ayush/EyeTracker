@@ -97,7 +97,10 @@ class HandTracker:
                 return None
 
         # Run MediaPipe Hands
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Hand landmarks are normalized, so a smaller input preserves gesture
+        # geometry while substantially reducing CPU work.
+        small_frame = cv2.resize(frame, (640, 360))
+        rgb = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb)
 
         if not results.multi_hand_landmarks:

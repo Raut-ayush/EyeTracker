@@ -16,6 +16,11 @@ CAMERA_HEIGHT = 720       # requested capture height
 # ============================================================
 DEAD_ZONE = 5             # pixels of cursor movement to ignore (reduces jitter)
 SCREEN_MARGIN = 15        # pixels from screen edge cursor is clamped to
+PYAUTOGUI_PAUSE = 0.01    # PyAutoGUI's default 0.10s pause makes tracking sluggish
+GAZE_MEDIAN_WINDOW = 5    # rejects brief involuntary gaze spikes (must be odd)
+CURSOR_ALPHA_LOW = 0.025  # fixation response: lower = steadier cursor
+CURSOR_ALPHA_HIGH = 0.30  # large gaze-shift response
+CURSOR_SPEED_THRESHOLD = 150.0  # pixels needed to approach fast response
 
 # ============================================================
 # BLINK GUARD
@@ -42,10 +47,14 @@ EDGE_ALPHA = 0.10          # alpha used inside edge zone (lower = more damp)
 # ============================================================
 CALIBRATION_SAMPLES = 30       # frames captured per calibration point
 CALIBRATION_TIMEOUT = 10.0     # seconds max wait per point
-HEAD_STABILITY_YAW = 0.12      # max yaw  deviation to count as "stable"
-HEAD_STABILITY_PITCH = 0.12    # max pitch deviation to count as "stable"
-CALIBRATION_SCHEMA_VERSION = 8 # increment when profile format changes
-RIDGE_LAMBDA = 5e-4            # Tikhonov regularisation strength
+CALIBRATION_SETTLE_SECONDS = 0.55  # ignore the initial eye saccade at each point
+CALIBRATION_STABILITY_WINDOW = 8   # rolling frames used to detect real motion
+HEAD_STABILITY_YAW = 0.008     # rolling yaw standard deviation limit
+HEAD_STABILITY_PITCH = 0.008   # rolling pitch standard deviation limit
+GAZE_STABILITY_X = 0.018       # rolling horizontal iris-position std limit
+GAZE_STABILITY_Y = 0.022       # rolling vertical iris-position std limit
+CALIBRATION_SCHEMA_VERSION = 9 # increment when profile format/model changes
+RIDGE_LAMBDA = 1.0             # regularisation for the standardized compact model
 
 # ============================================================
 # HAND TRACKER / TAP GESTURE

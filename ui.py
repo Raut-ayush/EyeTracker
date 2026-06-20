@@ -164,11 +164,16 @@ def render_calibration_frame(
     cv2.line(frame, (x - 18, y), (x + 18, y), (0, 0, 200), 1)
     cv2.line(frame, (x, y - 18), (x, y + 18), (0, 0, 200), 1)
 
-    # Progress bar (top of screen)
+    # Keep the HUD opposite the target. Fixed overlays used to cover top-row
+    # targets and made the bottom-right point disappear behind the preview.
+    hud_at_bottom = target[1] < 0.5
+    bar_y = screen_h - 145 if hud_at_bottom else 30
+    text_y = bar_y + 45
+
+    # Progress bar
     bar_w = screen_w - 80
     bar_h = 14
     bar_x = 40
-    bar_y = 30
     progress = (current + 1) / max(total, 1)
     fill_w = int(bar_w * progress)
 
@@ -180,11 +185,11 @@ def render_calibration_frame(
                   (60, 60, 60), 1)
 
     # Text overlay
-    cv2.putText(frame, f"Calibration {current + 1}/{total}", (30, 75),
+    cv2.putText(frame, f"Calibration {current + 1}/{total}", (30, text_y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (200, 200, 200), 2)
-    cv2.putText(frame, status, (30, 110),
+    cv2.putText(frame, status, (30, text_y + 35),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.75, (180, 180, 180), 2)
-    cv2.putText(frame, "[ESC] Exit", (30, 145),
+    cv2.putText(frame, "[ESC] Exit", (30, text_y + 70),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, (100, 100, 100), 1)
 
     # Camera preview
@@ -192,7 +197,9 @@ def render_calibration_frame(
         preview_copy = preview.copy()
         cv2.putText(preview_copy, "Camera", (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        _paste_preview(frame, preview_copy, screen_w - 380, screen_h - 260)
+        preview_x = 20 if target[0] >= 0.5 else screen_w - 380
+        preview_y = 170 if target[1] >= 0.5 else screen_h - 260
+        _paste_preview(frame, preview_copy, preview_x, preview_y)
 
     return frame
 

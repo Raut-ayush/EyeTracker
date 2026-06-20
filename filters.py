@@ -10,6 +10,7 @@ from config import (
     KALMAN_MEASUREMENT_NOISE,
     EDGE_ZONE_PX,
     EDGE_ALPHA,
+    GAZE_MEDIAN_WINDOW,
 )
 
 
@@ -29,6 +30,29 @@ class MovingAverage2D:
         avg_y = sum(self.y_values) / len(self.y_values)
 
         return avg_x, avg_y
+
+    def reset(self):
+        self.x_values.clear()
+        self.y_values.clear()
+
+
+# ============================================================
+# Median Filter 2D
+# ============================================================
+class MedianFilter2D:
+    """Reject short gaze spikes while preserving continuous motion."""
+
+    def __init__(self, size=GAZE_MEDIAN_WINDOW):
+        size = max(1, int(size))
+        if size % 2 == 0:
+            size += 1
+        self.x_values = deque(maxlen=size)
+        self.y_values = deque(maxlen=size)
+
+    def update(self, x, y):
+        self.x_values.append(float(x))
+        self.y_values.append(float(y))
+        return float(np.median(self.x_values)), float(np.median(self.y_values))
 
     def reset(self):
         self.x_values.clear()
